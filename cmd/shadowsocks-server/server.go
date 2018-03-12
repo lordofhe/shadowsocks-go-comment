@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
 )
@@ -38,6 +40,7 @@ const (
 
 var debug ss.DebugLog
 var udp bool
+var managerAddr string
 
 func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 	ss.SetReadTimeout(conn)
@@ -108,7 +111,7 @@ const logCntDelta = 100
 var connCnt int
 var nextLogConnCnt int = logCntDelta
 
-func handleConnection(conn *ss.Conn, auth bool) {
+func handleConnection(conn *ss.Conn, auth bool, port string) {
 	var host string
 
 	connCnt++ // this maybe not accurate, but should be enough
@@ -169,11 +172,22 @@ func handleConnection(conn *ss.Conn, auth bool) {
 		debug.Printf("piping %s<->%s ota=%v connOta=%v", conn.RemoteAddr(), host, ota, conn.IsOta())
 	}
 	if ota {
-		go ss.PipeThenCloseOta(conn, remote)
+		go func() {
+			ss.PipeThenCloseOta(conn, remote, func(flow int) {
+				passwdManager.addFlow(port, flow)
+			})
+		}()
 	} else {
-		go ss.PipeThenClose(conn, remote)
+		go func() {
+			ss.PipeThenClose(conn, remote, func(flow int) {
+				passwdManager.addFlow(port, flow)
+			})
+		}()
 	}
-	ss.PipeThenClose(remote, conn)
+	ss.PipeThenClose(remote, conn, func(flow int) {
+		passwdManager.addFlow(port, flow)
+	})
+
 	closed = true
 	return
 }
@@ -192,11 +206,13 @@ type PasswdManager struct {
 	sync.Mutex
 	portListener map[string]*PortListener
 	udpListener  map[string]*UDPListener
+	flowStats    map[string]int64
 }
 
 func (pm *PasswdManager) add(port, password string, listener net.Listener) {
 	pm.Lock()
 	pm.portListener[port] = &PortListener{password, listener}
+	pm.flowStats[port] = 0
 	pm.Unlock()
 }
 
@@ -235,10 +251,28 @@ func (pm *PasswdManager) del(port string) {
 	pl.listener.Close()
 	pm.Lock()
 	delete(pm.portListener, port)
+	delete(pm.flowStats, port)
 	if udp {
 		delete(pm.udpListener, port)
 	}
 	pm.Unlock()
+}
+
+func (pm *PasswdManager) addFlow(port string, n int) {
+	pm.Lock()
+	pm.flowStats[port] = pm.flowStats[port] + int64(n)
+	pm.Unlock()
+	return
+}
+
+func (pm *PasswdManager) getFlowStats() map[string]int64 {
+	pm.Lock()
+	copy := make(map[string]int64)
+	for k, v := range pm.flowStats {
+		copy[k] = v
+	}
+	pm.Unlock()
+	return copy
 }
 
 // Update port password would first close a port and restart listening on that
@@ -260,13 +294,25 @@ func (pm *PasswdManager) updatePortPasswd(port, password string, auth bool) {
 	// So there maybe concurrent access to passwdManager and we need lock to protect it.
 	go run(port, password, auth)
 	if udp {
-		pl, _ := pm.getUDP(port)
-		pl.listener.Close()
+		pl, ok := pm.getUDP(port)
+		if !ok {
+			log.Printf("new udp port %s added\n", port)
+		} else {
+			if pl.password == password {
+				return
+			}
+			log.Printf("closing udp port %s to update password\n", port)
+			pl.listener.Close()
+		}
 		go runUDP(port, password, auth)
 	}
 }
 
-var passwdManager = PasswdManager{portListener: map[string]*PortListener{}, udpListener: map[string]*UDPListener{}}
+var passwdManager = PasswdManager{
+	portListener: map[string]*PortListener{},
+	udpListener:  map[string]*UDPListener{},
+	flowStats:    map[string]int64{},
+}
 
 func updatePasswd() {
 	log.Println("updating password")
@@ -335,7 +381,7 @@ func run(port, password string, auth bool) {
 				continue
 			}
 		}
-		go handleConnection(ss.NewConn(conn, cipher.Copy()), auth)
+		go handleConnection(ss.NewConn(conn, cipher.Copy()), auth, port)
 	}
 }
 
@@ -360,8 +406,11 @@ func runUDP(port, password string, auth bool) {
 	}
 	SecurePacketConn := ss.NewSecurePacketConn(conn, cipher.Copy(), auth)
 	for {
-		if err := ss.ReadAndHandleUDPReq(SecurePacketConn); err != nil {
-			debug.Println(err)
+		if err := ss.ReadAndHandleUDPReq(SecurePacketConn, func(flow int) {
+			passwdManager.addFlow(port, flow)
+		}); err != nil {
+			debug.Printf("udp read error: %v\n", err)
+			return
 		}
 	}
 }
@@ -405,6 +454,7 @@ func main() {
 	flag.IntVar(&core, "core", 0, "maximum number of CPU cores to use, default is determinied by Go runtime")
 	flag.BoolVar((*bool)(&debug), "d", false, "print debug message")
 	flag.BoolVar(&udp, "u", false, "UDP Relay")
+	flag.StringVar(&managerAddr, "manager-address", "", "shadowsocks manager listening address")
 	flag.Parse()
 
 	if printVer {
@@ -451,5 +501,147 @@ func main() {
 		}
 	}
 
+	if managerAddr != "" {
+		addr, err := net.ResolveUDPAddr("udp", managerAddr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Can't resolve address: ", err)
+			os.Exit(1)
+		}
+		conn, err := net.ListenUDP("udp", addr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error listening:", err)
+			os.Exit(1)
+		}
+		log.Printf("manager listening udp addr %v ...\n", managerAddr)
+		defer conn.Close()
+		go managerDaemon(conn)
+	}
+
 	waitSignal()
+}
+
+func managerDaemon(conn *net.UDPConn) {
+	// add a report address set for ping response
+	// according to https://github.com/shadowsocks/shadowsocks/wiki/Manage-Multiple-Users#example-code
+	ctx := make(chan bool, 1)
+	defer close(ctx)
+	reportconnSet := make(map[string]*net.UDPAddr, 1024)
+	go func() {
+		timer := time.Tick(10 * time.Second)
+		for {
+			<-timer
+			switch {
+			case <-ctx:
+				return
+			default:
+				for _, addr := range reportconnSet {
+					res := reportStat()
+					if len(res) == 0 {
+						continue
+					}
+					conn.WriteToUDP(res, addr)
+				}
+			}
+		}
+	}()
+
+	for {
+		data := make([]byte, 300)
+		_, remote, err := conn.ReadFromUDP(data)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to read UDP manage msg, error: ", err.Error())
+			continue
+		}
+		command := string(data)
+		var res []byte
+		switch {
+		case strings.HasPrefix(command, "add:"):
+			res = handleAddPort(bytes.Trim(data[4:], "\x00\r\n "))
+		case strings.HasPrefix(command, "remove:"):
+			res = handleRemovePort(bytes.Trim(data[7:], "\x00\r\n "))
+		case strings.HasPrefix(command, "ping"):
+			conn.WriteToUDP(handlePing(), remote)
+			reportconnSet[remote.String()] = remote // append the host into the report list
+		case strings.HasPrefix(command, "ping-stop"): // add the stop ping command
+			conn.WriteToUDP(handlePing(), remote)
+			delete(reportconnSet, remote.String())
+		}
+		if len(res) == 0 {
+			continue
+		}
+		_, err = conn.WriteToUDP(res, remote)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to write UDP manage msg, error: ", err.Error())
+			continue
+		}
+	}
+}
+
+func handleAddPort(payload []byte) []byte {
+	var params struct {
+		ServerPort interface{} `json:"server_port"` // may be string or int
+		Password   string      `json:"password"`
+	}
+	json.Unmarshal(payload, &params)
+	if params.ServerPort == nil || params.Password == "" {
+		fmt.Fprintln(os.Stderr, "Failed to parse add req: ", string(payload))
+		return []byte("err")
+	}
+	port := parsePortNum(params.ServerPort)
+	if port == "" {
+		return []byte("err")
+	}
+	passwdManager.updatePortPasswd(port, params.Password, config.Auth)
+	return []byte("ok")
+}
+
+func handleRemovePort(payload []byte) []byte {
+	var params struct {
+		ServerPort interface{} `json:"server_port"` // may be string or int
+	}
+	json.Unmarshal(payload, &params)
+	if params.ServerPort == nil {
+		fmt.Fprintln(os.Stderr, "Failed to parse remove req: ", string(payload))
+		return []byte("err")
+	}
+	port := parsePortNum(params.ServerPort)
+	if port == "" {
+		return []byte("err")
+	}
+	log.Printf("closing port %s\n", port)
+	passwdManager.del(port)
+	return []byte("ok")
+}
+
+func handlePing() []byte {
+	return []byte("pong")
+}
+
+// reportStat get the stat:flowStat and return avery 10 sec as for the protocol
+// https://github.com/shadowsocks/shadowsocks/wiki/Manage-Multiple-Users
+func reportStat() []byte {
+	stats := passwdManager.getFlowStats()
+	var buf bytes.Buffer
+	buf.WriteString("stat: ")
+	ret, _ := json.Marshal(stats)
+	buf.Write(ret)
+	return buf.Bytes()
+}
+
+func parsePortNum(in interface{}) string {
+	var port string
+	switch in.(type) {
+	case string:
+		// try to convert to number then convert back, to ensure valid value
+		portNum, err := strconv.Atoi(in.(string))
+		if portNum == 0 || err != nil {
+			return ""
+		}
+		port = strconv.Itoa(portNum)
+	case float64:
+		port = strconv.Itoa(int(in.(float64)))
+	default:
+		return ""
+	}
+	return port
 }

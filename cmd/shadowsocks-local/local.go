@@ -38,6 +38,7 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
+//虽然是叫local，其实也是sock5协议的server端，因此还是要走解析sock5协议那一套。
 func handShake(conn net.Conn) (err error) {
 	const (
 		idVer     = 0
@@ -47,7 +48,7 @@ func handShake(conn net.Conn) (err error) {
 	// at most 256 methods, plus version and nmethod field in total 258 bytes
 	// the current rfc defines only 3 authentication methods (plus 2 reserved),
 	// so it won't be such long in practice
-
+	//看论文这里最大应该是257个字节，注释中却写258？
 	buf := make([]byte, 258)
 
 	var n int

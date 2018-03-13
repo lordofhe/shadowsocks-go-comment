@@ -288,6 +288,7 @@ func handleConnection(conn net.Conn) {
 		debug.Printf("socks connect from %s\n", conn.RemoteAddr().String())
 	}
 	closed := false
+	//函数执行完自动关闭连接
 	defer func() {
 		if !closed {
 			conn.Close()
@@ -295,10 +296,12 @@ func handleConnection(conn net.Conn) {
 	}()
 
 	var err error = nil
+	//socks5的握手协议，这个连接是浏览器进来的
 	if err = handShake(conn); err != nil {
 		log.Println("socks handshake:", err)
 		return
 	}
+	//根据协议规则解析请求，rawaddr是原生的地址，由字节组成，addr是把字节转成字符串以后格式IP:PORT
 	rawaddr, addr, err := getRequest(conn)
 	if err != nil {
 		log.Println("error getting request:", err)

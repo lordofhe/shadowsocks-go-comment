@@ -14,6 +14,7 @@ import (
 
 	"github.com/Yawning/chacha20"
 	"golang.org/x/crypto/blowfish"
+	//"github.com/golang/crypto/blowfish"
 	"golang.org/x/crypto/cast5"
 	"golang.org/x/crypto/salsa20/salsa"
 )
@@ -26,6 +27,7 @@ func md5sum(d []byte) []byte {
 	return h.Sum(nil)
 }
 
+//这里没看懂
 func evpBytesToKey(password string, keyLen int) (key []byte) {
 	const md5Len = 16
 
@@ -150,12 +152,14 @@ func newSalsa20Stream(key, iv []byte, _ DecOrEnc) (cipher.Stream, error) {
 	return &c, nil
 }
 
+//加密信息结构体
 type cipherInfo struct {
 	keyLen    int
 	ivLen     int
 	newStream func(key, iv []byte, doe DecOrEnc) (cipher.Stream, error)
 }
 
+//加密信息方案集合
 var cipherMethod = map[string]*cipherInfo{
 	"aes-128-cfb":   {16, 16, newAESCFBStream},
 	"aes-192-cfb":   {24, 16, newAESCFBStream},

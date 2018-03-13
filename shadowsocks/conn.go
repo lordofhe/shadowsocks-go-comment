@@ -13,6 +13,7 @@ const (
 	AddrMask        byte = 0xf
 )
 
+//连接结构体
 type Conn struct {
 	net.Conn
 	*Cipher
@@ -45,6 +46,7 @@ func RawAddr(addr string) (buf []byte, err error) {
 		return nil, fmt.Errorf("shadowsocks: invalid port %s", addr)
 	}
 
+	//看上面解析过程传入的应该是一个IP:PORT的字符串，这里为什么要按域名算？
 	hostLen := len(host)
 	l := 1 + 1 + hostLen + 2 // addrType + lenByte + address + port
 	buf = make([]byte, l)
@@ -59,10 +61,12 @@ func RawAddr(addr string) (buf []byte, err error) {
 // rawaddr shoud contain part of the data in socks request, starting from the
 // ATYP field. (Refer to rfc1928 for more information.)
 func DialWithRawAddr(rawaddr []byte, server string, cipher *Cipher) (c *Conn, err error) {
+	//连接服务器，这里的服务器是shadowsocks的server端
 	conn, err := net.Dial("tcp", server)
 	if err != nil {
 		return
 	}
+	//把原始连接跟加密方式封装
 	c = NewConn(conn, cipher)
 	if cipher.ota {
 		if c.enc == nil {

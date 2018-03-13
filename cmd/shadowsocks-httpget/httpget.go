@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
+	//ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
 	"io"
 	"math"
 	"net"
@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	ss "../../shadowsocks"
 )
 
 var config struct {

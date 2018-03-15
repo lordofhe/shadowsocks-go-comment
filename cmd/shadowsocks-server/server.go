@@ -51,11 +51,13 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 	// 1(addrType) + 1(lenByte) + 255(max length address) + 2(port) + 10(hmac-sha1)
 	buf := make([]byte, 269)
 	// read till we get possible domain length field
+	//这里要跟客户端代码一起看，conn如果是IPV4的话发过来的数据是1addrType + ipv4 + 2port
 	if _, err = io.ReadFull(conn, buf[:idType+1]); err != nil {
 		return
 	}
 
 	var reqStart, reqEnd int
+	//根据上面的格式说明，这里第一个字节就是IP类型
 	addrType := buf[idType]
 	switch addrType & ss.AddrMask {
 	case typeIPv4:
@@ -79,6 +81,8 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 	// Return string for typeIP is not most efficient, but browsers (Chrome,
 	// Safari, Firefox) all seems using typeDm exclusively. So this is not a
 	// big problem.
+
+	//这里容易混淆的是IPv4len变量跟上面的lenIPv4变量，注意这里IPv4len仅仅是IP的长度
 	switch addrType & ss.AddrMask {
 	case typeIPv4:
 		host = net.IP(buf[idIP0 : idIP0+net.IPv4len]).String()
@@ -112,6 +116,7 @@ const logCntDelta = 100
 var connCnt int
 var nextLogConnCnt int = logCntDelta
 
+//服务端没有进行握手，没有遵循socks协议
 func handleConnection(conn *ss.Conn, auth bool, port string) {
 	var host string
 
@@ -153,6 +158,7 @@ func handleConnection(conn *ss.Conn, auth bool, port string) {
 		return
 	}
 	debug.Println("connecting", host)
+	//代理的server端连接真正的目标服务器
 	remote, err := net.Dial("tcp", host)
 	if err != nil {
 		if ne, ok := err.(*net.OpError); ok && (ne.Err == syscall.EMFILE || ne.Err == syscall.ENFILE) {

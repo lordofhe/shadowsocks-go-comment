@@ -136,6 +136,7 @@ func getRequest(conn net.Conn) (rawaddr []byte, host string, err error) {
 		return
 	}
 
+	//如果是IPV4的话，rawaddr包括的信息是1addrType + ipv4 + 2port
 	rawaddr = buf[idType:reqLen]
 
 	if debug {
@@ -241,6 +242,7 @@ func parseServerConfig(config *ss.Config) {
 
 func connectToServer(serverId int, rawaddr []byte, addr string) (remote *ss.Conn, err error) {
 	se := servers.srvCipher[serverId]
+	//这里的入参分别是实际要访问的IP，代理服务器的IP以及加密器
 	remote, err = ss.DialWithRawAddr(rawaddr, se.server, se.cipher.Copy())
 	if err != nil {
 		log.Println("error connecting to shadowsocks server:", err)
@@ -284,6 +286,7 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 	return nil, err
 }
 
+//客户端进行了握手，遵守了socks5协议
 func handleConnection(conn net.Conn) {
 	if debug {
 		debug.Printf("socks connect from %s\n", conn.RemoteAddr().String())
@@ -317,6 +320,8 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	//这里传入的地址是要访问的真实地址，不是代理地址，因为代理地址已经配置在config.json中了
+	//返回的remote是client与代理服务器的连接
 	remote, err := createServerConn(rawaddr, addr)
 	if err != nil {
 		if len(servers.srvCipher) > 1 {

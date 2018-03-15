@@ -61,12 +61,12 @@ func RawAddr(addr string) (buf []byte, err error) {
 // rawaddr shoud contain part of the data in socks request, starting from the
 // ATYP field. (Refer to rfc1928 for more information.)
 func DialWithRawAddr(rawaddr []byte, server string, cipher *Cipher) (c *Conn, err error) {
-	//连接服务器，这里的服务器是shadowsocks的server端
+	//连接服务器，这里的服务器是shadowsocks的server端，及代理服务器
 	conn, err := net.Dial("tcp", server)
 	if err != nil {
 		return
 	}
-	//把原始连接跟加密方式封装
+	//把与代理服务器的连接与加密方式封装成一个连接
 	c = NewConn(conn, cipher)
 	if cipher.ota {
 		if c.enc == nil {
@@ -79,6 +79,7 @@ func DialWithRawAddr(rawaddr []byte, server string, cipher *Cipher) (c *Conn, er
 		rawaddr[0] |= OneTimeAuthMask
 		rawaddr = otaConnectAuth(cipher.iv, cipher.key, rawaddr)
 	}
+	//这里为什么要向代理服务器发一次目标地址？
 	if _, err = c.write(rawaddr); err != nil {
 		c.Close()
 		return nil, err

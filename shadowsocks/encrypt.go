@@ -27,7 +27,8 @@ func md5sum(d []byte) []byte {
 	return h.Sum(nil)
 }
 
-//这里没看懂
+//这里是根据访问server端的密码生成一个指定长度的key
+//这个key是加密算法本身需要的
 func evpBytesToKey(password string, keyLen int) (key []byte) {
 	const md5Len = 16
 
@@ -200,6 +201,7 @@ type Cipher struct {
 // NewCipher creates a cipher that can be used in Dial() etc.
 // Use cipher.Copy() to create a new cipher with the same method and password
 // to avoid the cost of repeated cipher initialization.
+//入参password是访问server时指定的密码，在config.json中配置
 func NewCipher(method, password string) (c *Cipher, err error) {
 	if password == "" {
 		return nil, errEmptyPassword
@@ -230,6 +232,7 @@ func NewCipher(method, password string) (c *Cipher, err error) {
 // Initializes the block cipher with CFB mode, returns IV.
 func (c *Cipher) initEncrypt() (iv []byte, err error) {
 	if c.iv == nil {
+		//随机生成一个初始变量iv
 		iv = make([]byte, c.info.ivLen)
 		if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 			return nil, err

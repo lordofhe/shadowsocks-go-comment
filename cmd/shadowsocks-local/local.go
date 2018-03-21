@@ -55,6 +55,7 @@ func handShake(conn net.Conn) (err error) {
 	var n int
 	ss.SetReadTimeout(conn)
 	// make sure we get the nmethod field
+	//前两个字节一个是ver，一个是nmethod
 	if n, err = io.ReadAtLeast(conn, buf, idNmethod+1); err != nil {
 		return
 	}
@@ -62,10 +63,13 @@ func handShake(conn net.Conn) (err error) {
 		return errVer
 	}
 	nmethod := int(buf[idNmethod])
+	//这里根据头信息中指明的方法数量（一个就是1字节）然后再加上上面说的ver跟nmethod两个字节作为消息的总长度
 	msgLen := nmethod + 2
+	//n是实际读取到的字节数，理论上跟实际字节数按理说是一样的
 	if n == msgLen { // handshake done, common case
 		// do nothing, jump directly to send confirmation
 	} else if n < msgLen { // has more methods to read, rare case
+		//如果不够就把剩余的读完
 		if _, err = io.ReadFull(conn, buf[n:msgLen]); err != nil {
 			return
 		}
@@ -73,10 +77,13 @@ func handShake(conn net.Conn) (err error) {
 		return errAuthExtraData
 	}
 	// send confirmation: version 5, no authentication required
+	//返回浏览器连接
 	_, err = conn.Write([]byte{socksVer5, 0})
 	return
 }
 
+//不用怀疑，加密算法可以一次性给多个字节加密，然后读取部分字节进行解密
+//因此客户端是一次性加密发过来，但这里的逻辑是分别读取部分字节进行解密
 func getRequest(conn net.Conn) (rawaddr []byte, host string, err error) {
 	const (
 		idVer   = 0
@@ -124,7 +131,7 @@ func getRequest(conn net.Conn) (rawaddr []byte, host string, err error) {
 		err = errAddrType
 		return
 	}
-
+	//同样是判断理论应该读取的数字节跟实际读取的是否一致
 	if n == reqLen {
 		// common case, do nothing
 	} else if n < reqLen { // rare case
@@ -174,6 +181,7 @@ func parseServerConfig(config *ss.Config) {
 		return port != ""
 	}
 
+	//只指定了一个server情况
 	if len(config.ServerPassword) == 0 {
 		method := config.Method
 		if config.Auth {
@@ -185,8 +193,10 @@ func parseServerConfig(config *ss.Config) {
 			log.Fatal("Failed generating ciphers:", err)
 		}
 		srvPort := strconv.Itoa(config.ServerPort)
+		//获取server数组
 		srvArr := config.GetServerArray()
 		n := len(srvArr)
+		//每个代理server对应一个加密对象
 		servers.srvCipher = make([]*ServerCipher, n)
 
 		for i, s := range srvArr {
@@ -314,6 +324,8 @@ func handleConnection(conn net.Conn) {
 	// Sending connection established message immediately to client.
 	// This some round trip time for creating socks connection with the client.
 	// But if connection failed, the client will get connection reset error.
+	//这里IP地址设置为0.0.0.0可以理解为默认本地地址，但端口号设置成08 43奇怪，不应该是配置文件中指定的么？
+	//论文里写的意思端口号是本地用来访问proxy服务器的，IP是返回给客户端的
 	_, err = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x43})
 	if err != nil {
 		debug.Println("send connection confirmation:", err)
@@ -419,6 +431,8 @@ func main() {
 	if config.Method == "" {
 		config.Method = "aes-256-cfb"
 	}
+
+	//校验一个服务器跟多个服务器的情况
 	if len(config.ServerPassword) == 0 {
 		if !enoughOptions(config) {
 			fmt.Fprintln(os.Stderr, "must specify server address, password and both server/local port")

@@ -95,6 +95,7 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 	port := binary.BigEndian.Uint16(buf[reqEnd-2 : reqEnd])
 	host = net.JoinHostPort(host, strconv.Itoa(int(port)))
 	// if specified one time auth enabled, we should verify this
+	//校验的方式就是重新计算请求数据的hash值（排除客户端发来的hash值），然后比较hash值是否相同
 	if auth || addrType&ss.OneTimeAuthMask > 0 {
 		ota = true
 		if _, err = io.ReadFull(conn, buf[reqEnd:reqEnd+lenHmacSha1]); err != nil {

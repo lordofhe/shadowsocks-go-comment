@@ -9,7 +9,9 @@ import (
 )
 
 const (
+	//1010
 	OneTimeAuthMask byte = 0x10
+	//1111
 	AddrMask        byte = 0xf
 )
 
@@ -68,6 +70,8 @@ func DialWithRawAddr(rawaddr []byte, server string, cipher *Cipher) (c *Conn, er
 	}
 	//把与代理服务器的连接与加密方式封装成一个连接
 	c = NewConn(conn, cipher)
+
+	//如果需要权限验证的话把验证信息加在rawaddr后面
 	if cipher.ota {
 		if c.enc == nil {
 			if _, err = c.initEncrypt(); err != nil {
@@ -75,11 +79,12 @@ func DialWithRawAddr(rawaddr []byte, server string, cipher *Cipher) (c *Conn, er
 			}
 		}
 		// since we have initEncrypt, we must send iv manually
+		//这里是使用go原生的conn类写iv变量给server
 		conn.Write(cipher.iv)
 		rawaddr[0] |= OneTimeAuthMask
 		rawaddr = otaConnectAuth(cipher.iv, cipher.key, rawaddr)
 	}
-	//这里为什么要向代理服务器发一次目标地址？
+	//向代理服务器发一次目标地址，这里是使用封装好的连接对象
 	if _, err = c.write(rawaddr); err != nil {
 		c.Close()
 		return nil, err
@@ -156,6 +161,7 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 
 	n, err = c.write(b)
 	// Make sure <= 0 <= len(b), where b is the slice passed in.
+	//返回的n是指写出去的真实数据，如果在写出去以前因为加密原因增加了一些头信息，则需要减去
 	if n >= headerLen {
 		n -= headerLen
 	}
@@ -172,6 +178,8 @@ func (c *Conn) write(b []byte) (n int, err error) {
 	}
 
 	cipherData := c.writeBuf
+	//这里有一层隐藏含义，如果c.enc没有初始化，则上面代码会初始化并设置iv的值
+	//如果已经初始化了，iv没有复制，即这里len(iv)就是0，也就是只有数据长度
 	dataSize := len(b) + len(iv)
 	if dataSize > len(cipherData) {
 		cipherData = make([]byte, dataSize)
@@ -182,9 +190,11 @@ func (c *Conn) write(b []byte) (n int, err error) {
 	if iv != nil {
 		// Put initialization vector in buffer, do a single write to send both
 		// iv and data.
+		//如果这次是初始化，参考上面。则先把iv装进去，也就是iv放在数据前面
 		copy(cipherData, iv)
 	}
 
+	//这里可以看出来只加密数据，不加密iv
 	c.encrypt(cipherData[len(iv):], b)
 	n, err = c.Conn.Write(cipherData)
 	return
